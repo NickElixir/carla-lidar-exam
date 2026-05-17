@@ -1,0 +1,17 @@
+flowchart TD
+    A[Start CARLA Server] --> B[Run exam_lidar_minimal.py]
+    B --> C[Connect Python Client to CARLA]
+    C --> D[Clear old NPCs if requested]
+    D --> E[Spawn Ego Vehicle]
+    E --> F[Spawn 20 Static Pedestrians]
+    E --> G[Attach RGB Camera]
+    E --> H[Attach Semantic LiDAR]
+    G --> I[Tk Camera Viewer]
+    H --> J[Parse LiDAR Raw Data]
+    J --> K[Semantic Point Cloud]
+    F --> L[Read Actor Bounding Boxes]
+    L --> M[Transform GT Boxes to LiDAR Frame]
+    K --> N[Open3D Point Cloud Viewer]
+    M --> N
+    K --> O[Dataset PCD Export]
+    M --> P[Dataset JSON Labels]
