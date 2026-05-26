@@ -10,16 +10,20 @@ if [[ -n "${DISPLAY:-}" && -z "${SDL_VIDEODRIVER:-}" ]]; then
   export SDL_VIDEODRIVER=x11
 fi
 
-exec conda run --no-capture-output -n carla0915 python exam_lidar_minimal.py \
+exec "/media/hyperdog/Новый том1/venv_carla0916/bin/python" exam_lidar_minimal.py \
   --viewer tk \
   --width 800 \
   --height 450 \
   --viewer-fps 10 \
   --open3d-update-hz 5 \
-  --open3d-max-points 30000 \
-  --lidar-points-per-second 100000 \
-  --lidar-rotation-frequency 10 \
+  --open3d-max-points 500000\
+  --lidar-points-per-second 500000 \
+  --lidar-rotation-frequency 20 \
+  --lidar-noise-stddev 0.02 \
   --fixed-delta-seconds 0.05 \
   --clear-existing-npcs \
   --static-people 20 \
+  --people-min-distance 2.0 \
+  --people-radius 12.0 \
+  --lidar-range 150 \
   "$@"

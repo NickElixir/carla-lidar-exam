@@ -45,6 +45,45 @@ from pygame.locals import K_a, K_d, K_DOWN, K_ESCAPE, K_LEFT, K_RIGHT
 from pygame.locals import K_s, K_SPACE, K_UP, K_w
 
 
+try:
+    from pynput import keyboard as _pynput_kb
+
+    class GlobalKeys:
+        _KEY_MAP = {
+            'w': 'w', 's': 's', 'a': 'a', 'd': 'd',
+            'r': 'r', 'l': 'l',
+            _pynput_kb.Key.up: 'up', _pynput_kb.Key.down: 'down',
+            _pynput_kb.Key.left: 'left', _pynput_kb.Key.right: 'right',
+            _pynput_kb.Key.space: 'space', _pynput_kb.Key.esc: 'escape',
+        }
+
+        def __init__(self):
+            self.keys = set()
+            self._listener = _pynput_kb.Listener(
+                on_press=self._press, on_release=self._release)
+            self._listener.start()
+
+        def _resolve(self, key):
+            return self._KEY_MAP.get(key) or self._KEY_MAP.get(getattr(key, 'char', None))
+
+        def _press(self, key):
+            k = self._resolve(key)
+            if k:
+                self.keys.add(k)
+
+        def _release(self, key):
+            k = self._resolve(key)
+            if k:
+                self.keys.discard(k)
+
+        def stop(self):
+            self._listener.stop()
+
+    _GLOBAL_KEYS = GlobalKeys()
+except Exception:
+    _GLOBAL_KEYS = None
+
+
 SEMANTIC_COLORS = np.array([
     (255, 255, 255),
     (70, 70, 70),
@@ -131,27 +170,27 @@ def spawn_static_people(world, ego, args):
         raise RuntimeError("No pedestrian blueprints matched %s" % args.people_filter)
 
     ego_location = ego.get_location()
+    n = args.static_people
+    offset_angle = random.uniform(0, 2.0 * np.pi)
     candidates = []
-    attempts = 0
-    while len(candidates) < args.static_people * 6 and attempts < args.people_attempts:
-        attempts += 1
+    for i in range(n * 5):
+        sector_angle = offset_angle + 2.0 * np.pi * (i % n) / n
+        angle = sector_angle + random.uniform(-np.pi / n, np.pi / n)
+        radius = random.uniform(args.people_min_distance, args.people_radius)
+        candidates.append(carla.Location(
+            x=ego_location.x + radius * np.cos(angle),
+            y=ego_location.y + radius * np.sin(angle),
+            z=ego_location.z + 0.5,
+        ))
+    for _ in range(min(300, args.people_attempts)):
         location = world.get_random_location_from_navigation()
         if location is None:
             continue
+        location.x += random.uniform(-1.0, 1.0)
+        location.y += random.uniform(-1.0, 1.0)
         distance = distance_2d(location, ego_location)
         if args.people_min_distance <= distance <= args.people_radius:
             candidates.append(location)
-
-    if len(candidates) < args.static_people:
-        distances = np.linspace(args.people_min_distance, args.people_radius, num=4)
-        for distance in distances:
-            for index in range(max(args.static_people * 3, 24)):
-                angle = 2.0 * np.pi * index / max(args.static_people * 3, 24)
-                candidates.append(carla.Location(
-                    x=ego_location.x + distance * np.cos(angle),
-                    y=ego_location.y + distance * np.sin(angle),
-                    z=ego_location.z + 0.5,
-                ))
 
     random.shuffle(candidates)
     people = []
@@ -178,15 +217,19 @@ def actor_bbox_vertices_in_lidar(actor, lidar_transform):
     extent = bbox.extent
     if extent.x <= 0.0 or extent.y <= 0.0 or extent.z <= 0.0:
         return None
+    # padding so wide-belly pedestrian meshes stay inside the box
+    ex = extent.x 
+    ey = extent.y
+    ez = extent.z
     local_corners = np.array([
-        [-extent.x, -extent.y, -extent.z, 1.0],
-        [-extent.x, extent.y, -extent.z, 1.0],
-        [extent.x, -extent.y, -extent.z, 1.0],
-        [extent.x, extent.y, -extent.z, 1.0],
-        [-extent.x, -extent.y, extent.z, 1.0],
-        [-extent.x, extent.y, extent.z, 1.0],
-        [extent.x, -extent.y, extent.z, 1.0],
-        [extent.x, extent.y, extent.z, 1.0],
+        [-ex, -ey, -ez, 1.0],
+        [-ex,  ey, -ez, 1.0],
+        [ ex, -ey, -ez, 1.0],
+        [ ex,  ey, -ez, 1.0],
+        [-ex, -ey,  ez, 1.0],
+        [-ex,  ey,  ez, 1.0],
+        [ ex, -ey,  ez, 1.0],
+        [ ex,  ey,  ez, 1.0],
     ], dtype=np.float64)
 
     bbox_rotation = getattr(bbox, "rotation", carla.Rotation())
@@ -200,11 +243,12 @@ def actor_bbox_vertices_in_lidar(actor, lidar_transform):
     return lidar_corners
 
 
-def build_bbox_lineset_data(actors, lidar_transform, max_distance=None):
+def build_bbox_lineset_data(actors, lidar_transform, max_distance=None, line_color=None):
     points = []
     lines = []
     colors = []
-    line_color = [1.0, 0.85, 0.05]
+    if line_color is None:
+        line_color = [1.0, 0.85, 0.05]
 
     for actor in actors:
         if actor is None or not actor.is_alive:
@@ -356,7 +400,7 @@ class Open3DView(object):
         self.visualizer.create_window("Exam Semantic LiDAR", width=960, height=540, left=60, top=60)
         options = self.visualizer.get_render_option()
         options.background_color = np.array([0.02, 0.02, 0.02])
-        options.point_size = 1.0
+        options.point_size = 2.0
         options.show_coordinate_frame = True
         self.point_cloud_added = False
         self.box_lines_added = False
@@ -494,18 +538,18 @@ def apply_manual_control(vehicle, keys):
     wants_reverse = "s" in keys or "down" in keys
 
     if wants_forward:
-        control.throttle = 0.65
+        control.throttle = 0.35
         control.brake = 0.0
         control.reverse = False
         control.gear = 1
     elif wants_reverse:
-        if longitudinal_speed > 0.25:
+        if longitudinal_speed > 0.05:
             control.throttle = 0.0
             control.brake = 0.9
             control.reverse = False
             control.gear = 1
         else:
-            control.throttle = 0.45
+            control.throttle = 0.5
             control.brake = 0.0
             control.reverse = True
             control.gear = -1
@@ -515,9 +559,9 @@ def apply_manual_control(vehicle, keys):
         control.reverse = False
         control.gear = 1
 
-    control.steer = -0.45 if "a" in keys or "left" in keys else 0.0
+    control.steer = -0.3 if "a" in keys or "left" in keys else 0.0
     if "d" in keys or "right" in keys:
-        control.steer = 0.45
+        control.steer = 0.3
     control.hand_brake = "space" in keys
     vehicle.apply_control(control)
 
@@ -584,6 +628,7 @@ class TkCameraView(object):
     KEYCODE_ALIASES = {
         9: "escape",
         25: "w",
+        27: "r",
         38: "a",
         39: "s",
         40: "d",
@@ -626,9 +671,12 @@ class TkCameraView(object):
             font=("DejaVu Sans", 11),
         )
         self.status.pack(fill="x")
+        self.root.attributes("-topmost", True)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.bind_all("<KeyPress>", self._key_press)
         self.root.bind_all("<KeyRelease>", self._key_release)
+        self.root.bind("<Enter>", lambda e: self.image_label.focus_set())
+        self.root.bind("<Button-1>", lambda e: self.image_label.focus_set())
         self.root.update_idletasks()
         self.root.focus_force()
         self.image_label.focus_set()
@@ -682,10 +730,11 @@ class TkCameraView(object):
 
         active = ",".join(sorted(self.keys)) if self.keys else "-"
         self.status_var.set(
-            "WASD/arrows: drive | Space: hand brake | L: save dataset frame | ESC: quit    "
-            "RGB frame: %d    LiDAR frame: %d    Static pedestrians: %d    Keys: %s"
+            "WASD: drive | Space: brake | R: respawn pedestrians | L: save frame | ESC: quit    "
+            "RGB frame: %d    LiDAR frame: %d    Pedestrians: %d    Keys: %s"
             % (camera_frame, lidar_frame, people_count, active)
         )
+        self.image_label.focus_set()
         self.root.update_idletasks()
         self.root.update()
         return not self.closed
@@ -693,6 +742,7 @@ class TkCameraView(object):
     def pump_events(self):
         if self.closed:
             return False
+        self.image_label.focus_set()
         self.root.update_idletasks()
         self.root.update()
         return not self.closed
@@ -775,6 +825,11 @@ def run(args):
             else:
                 keys = set()
 
+            if _GLOBAL_KEYS is not None:
+                keys = keys | _GLOBAL_KEYS.keys
+            if "escape" in keys:
+                running = False
+
             apply_manual_control(ego, keys)
             follow_with_spectator(world, ego)
             world.tick()
@@ -787,9 +842,31 @@ def run(args):
             if open3d_view is not None:
                 points, colors, lidar_frame = lidar.snapshot()
                 if args.show_gt_boxes:
-                    box_data = build_bbox_lineset_data(people, lidar.sensor.get_transform(), args.lidar_range)
+                    p_pts, p_lns, p_cls = build_bbox_lineset_data(people, lidar.sensor.get_transform(), args.lidar_range)
+                    e_pts, e_lns, e_cls = build_bbox_lineset_data([ego], lidar.sensor.get_transform(), line_color=[0.0, 0.9, 1.0])
+                    all_pts, all_lns, all_cls = [], [], []
+                    offset = 0
+                    for pts, lns, cls in [(p_pts, p_lns, p_cls), (e_pts, e_lns, e_cls)]:
+                        if pts is not None:
+                            all_pts.append(pts)
+                            all_lns.append(lns + offset)
+                            all_cls.append(cls)
+                            offset += len(pts)
+                    if all_pts:
+                        box_data = (np.concatenate(all_pts), np.concatenate(all_lns), np.concatenate(all_cls))
             if open3d_view is not None:
                 open3d_view.tick(points, colors, box_data)
+
+            if "r" in keys and "r" not in previous_keys:
+                print("Respawning pedestrians...")
+                for person in people:
+                    if person is not None and person.is_alive:
+                        person.destroy()
+                for person in people:
+                    if person in actors:
+                        actors.remove(person)
+                people = spawn_static_people(world, ego, args)
+                actors.extend(people)
 
             save_requested = dataset_writer is not None and (
                 args.save_once and not saved_once and lidar_frame > 0
@@ -839,6 +916,8 @@ def run(args):
             else:
                 time.sleep(0.005)
     finally:
+        if _GLOBAL_KEYS is not None:
+            _GLOBAL_KEYS.stop()
         if tk_view is not None:
             tk_view.destroy()
         if open3d_view is not None:
@@ -887,6 +966,7 @@ def parse_args():
     parser.add_argument("--lidar-rotation-frequency", default=20.0, type=float)
     parser.add_argument("--lidar-upper-fov", default=10.0, type=float)
     parser.add_argument("--lidar-lower-fov", default=-30.0, type=float)
+    parser.add_argument("--lidar-noise-stddev", default=0.02, type=float)
     parser.add_argument("--lidar-z-offset", default=0.6, type=float)
     return parser.parse_args()
 
