@@ -26,6 +26,8 @@ The default launcher now targets CARLA 0.9.16 with the `carla0916` Conda
 environment. The previous `carla0915` environment is kept for CARLA 0.9.15.
 The default LiDAR settings use `500000` points per second and keep up to
 `500000` points in the Open3D cloud.
+Pedestrians are spawned in a ring around the ego vehicle and capped to a
+maximum radius of `10 m`.
 
 ## How To Run
 
@@ -211,6 +213,7 @@ CARLA uses its own coordinate system. Open3D uses a different convention. The sc
 - the Y coordinate is negated for Open3D visualization;
 - actor bounding box vertices come from CARLA in world space via `get_world_vertices(actor.get_transform())`, then are transformed from world space to LiDAR space;
 - pedestrian boxes can be refined by semantic LiDAR `object_idx` points without shrinking below the CARLA 8-vertex box;
+- the ego vehicle has its own cyan 3D bounding box in the Open3D view;
 - the same Y conversion is applied to boxes.
 
 ## Performance Notes

@@ -153,6 +153,9 @@ For less noisy/smeared demo visuals, the script disables camera post-processing
 and sets LiDAR noise/dropoff attributes to zero when the active CARLA blueprint
 supports those attributes.
 
+Manual driving uses throttle ramping instead of a hard speed limit. The default
+forward throttle is `0.55`, reached gradually via `--throttle-ramp-rate 0.9`.
+
 If the LiDAR scan looks split or incomplete, keep the LiDAR rotation frequency
 aligned with the synchronous timestep. For example:
 

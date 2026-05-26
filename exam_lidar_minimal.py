@@ -181,11 +181,32 @@ def spawn_static_people(world, ego, args):
         raise RuntimeError("No pedestrian blueprints matched %s" % args.people_filter)
 
     ego_location = ego.get_location()
+    ego_transform = ego.get_transform()
+    forward = ego_transform.get_forward_vector()
+    right = ego_transform.get_right_vector()
     people_radius = min(args.people_radius, MAX_PEOPLE_RADIUS)
     people_min_distance = min(args.people_min_distance, people_radius)
     candidates = []
+
+    slots = max(args.static_people * 4, 32)
+    for index in range(slots):
+        ring = index // max(args.static_people, 1)
+        angle = 2.0 * np.pi * (index % max(args.static_people, 1)) / max(args.static_people, 1)
+        angle += random.uniform(-0.18, 0.18)
+        radius_fraction = (ring + 1.0) / max(slots // max(args.static_people, 1), 1)
+        radius = people_min_distance + (people_radius - people_min_distance) * radius_fraction
+        radius += random.uniform(-0.35, 0.35)
+        radius = min(max(radius, people_min_distance), people_radius)
+        offset_x = radius * np.cos(angle)
+        offset_y = radius * np.sin(angle)
+        candidates.append(carla.Location(
+            x=ego_location.x + forward.x * offset_x + right.x * offset_y,
+            y=ego_location.y + forward.y * offset_x + right.y * offset_y,
+            z=ego_location.z + 0.5,
+        ))
+
     attempts = 0
-    while len(candidates) < args.static_people * 6 and attempts < args.people_attempts:
+    while len(candidates) < args.static_people * 8 and attempts < args.people_attempts:
         attempts += 1
         location = world.get_random_location_from_navigation()
         if location is None:
@@ -194,18 +215,7 @@ def spawn_static_people(world, ego, args):
         if people_min_distance <= distance <= people_radius:
             candidates.append(location)
 
-    if len(candidates) < args.static_people:
-        distances = np.linspace(people_min_distance, people_radius, num=4)
-        for distance in distances:
-            for index in range(max(args.static_people * 3, 24)):
-                angle = 2.0 * np.pi * index / max(args.static_people * 3, 24)
-                candidates.append(carla.Location(
-                    x=ego_location.x + distance * np.cos(angle),
-                    y=ego_location.y + distance * np.sin(angle),
-                    z=ego_location.z + 0.5,
-                ))
-
-    random.shuffle(candidates)
+    candidates.sort(key=lambda location: distance_2d(location, ego_location))
     people = []
     for location in candidates:
         if len(people) >= args.static_people:
@@ -313,11 +323,19 @@ def bbox_dimensions_from_vertices(vertices):
     }
 
 
-def build_bbox_lineset_data(actors, lidar_transform, max_distance=None, lidar_points=None, object_ids=None):
+def build_bbox_lineset_data(
+    actors,
+    lidar_transform,
+    max_distance=None,
+    lidar_points=None,
+    object_ids=None,
+    line_color=None,
+):
     points = []
     lines = []
     colors = []
-    line_color = [1.0, 0.85, 0.05]
+    if line_color is None:
+        line_color = [1.0, 0.85, 0.05]
 
     for actor in actors:
         if actor is None or not actor.is_alive:
@@ -340,6 +358,24 @@ def build_bbox_lineset_data(actors, lidar_transform, max_distance=None, lidar_po
     if box_points.size == 0 or box_lines.size == 0:
         return None, None, None
     return box_points, box_lines, box_colors
+
+
+def merge_bbox_linesets(*datasets):
+    all_points = []
+    all_lines = []
+    all_colors = []
+    offset = 0
+    for dataset in datasets:
+        if dataset is None or dataset[0] is None:
+            continue
+        points, lines, colors = dataset
+        all_points.append(points)
+        all_lines.append(lines + offset)
+        all_colors.append(colors)
+        offset += len(points)
+    if not all_points:
+        return None
+    return np.concatenate(all_points), np.concatenate(all_lines), np.concatenate(all_colors)
 
 
 class CameraSensor(object):
@@ -612,31 +648,29 @@ def build_sustech_labels(actors, lidar_transform, max_distance=None, lidar_point
     return labels
 
 
-def apply_manual_control(vehicle, keys, args):
+def apply_manual_control(vehicle, keys, args, control_state):
     control = carla.VehicleControl()
     velocity = vehicle.get_velocity()
     forward = vehicle.get_transform().get_forward_vector()
     longitudinal_speed = velocity.x * forward.x + velocity.y * forward.y + velocity.z * forward.z
     wants_forward = "w" in keys or "up" in keys
     wants_reverse = "s" in keys or "down" in keys
+    dt = max(args.fixed_delta_seconds, 0.001)
+    throttle = control_state.get("throttle", 0.0)
+    target_throttle = 0.0
 
     if wants_forward:
-        if longitudinal_speed >= args.max_forward_speed:
-            control.throttle = 0.0
-            control.brake = 0.08
-        else:
-            control.throttle = args.drive_throttle
-            control.brake = 0.0
+        target_throttle = args.drive_throttle
         control.reverse = False
         control.gear = 1
     elif wants_reverse:
         if longitudinal_speed > 0.25:
-            control.throttle = 0.0
+            throttle = 0.0
             control.brake = args.drive_brake
             control.reverse = False
             control.gear = 1
         else:
-            control.throttle = 0.0 if abs(longitudinal_speed) >= args.max_reverse_speed else args.reverse_throttle
+            target_throttle = args.reverse_throttle
             control.brake = 0.0
             control.reverse = True
             control.gear = -1
@@ -645,6 +679,13 @@ def apply_manual_control(vehicle, keys, args):
         control.brake = 0.0
         control.reverse = False
         control.gear = 1
+
+    if target_throttle > throttle:
+        throttle = min(target_throttle, throttle + args.throttle_ramp_rate * dt)
+    else:
+        throttle = max(target_throttle, throttle - args.throttle_release_rate * dt)
+    control.throttle = throttle
+    control_state["throttle"] = throttle
 
     control.steer = -args.drive_steer if "a" in keys or "left" in keys else 0.0
     if "d" in keys or "right" in keys:
@@ -868,6 +909,7 @@ def run(args):
     open3d_view = None
     dataset_writer = DatasetWriter(args.dataset_dir) if args.save_dataset else None
     previous_keys = set()
+    control_state = {"throttle": 0.0}
     saved_once = False
     started_at = time.time()
 
@@ -911,7 +953,7 @@ def run(args):
             else:
                 keys = set()
 
-            apply_manual_control(ego, keys, args)
+            apply_manual_control(ego, keys, args, control_state)
             follow_with_spectator(world, ego)
             world.tick()
 
@@ -924,13 +966,20 @@ def run(args):
             if open3d_view is not None:
                 points, colors, object_ids, lidar_frame = lidar.snapshot(include_object_ids=True)
                 if args.show_gt_boxes:
-                    box_data = build_bbox_lineset_data(
+                    people_box_data = build_bbox_lineset_data(
                         people,
                         lidar.sensor.get_transform(),
                         args.lidar_range,
                         points,
                         object_ids,
                     )
+                    ego_box_data = build_bbox_lineset_data(
+                        [ego],
+                        lidar.sensor.get_transform(),
+                        args.lidar_range,
+                        line_color=[0.0, 0.9, 1.0],
+                    )
+                    box_data = merge_bbox_linesets(people_box_data, ego_box_data)
             if open3d_view is not None:
                 open3d_view.tick(points, colors, box_data)
 
@@ -1042,12 +1091,12 @@ def parse_args():
     parser.add_argument("--lidar-dropoff-zero-intensity", default=0.0, type=float)
     parser.add_argument("--lidar-atmosphere-attenuation-rate", default=0.0, type=float)
     parser.add_argument("--lidar-z-offset", default=0.6, type=float)
-    parser.add_argument("--drive-throttle", default=0.35, type=float)
+    parser.add_argument("--drive-throttle", default=0.55, type=float)
     parser.add_argument("--reverse-throttle", default=0.35, type=float)
     parser.add_argument("--drive-brake", default=0.55, type=float)
     parser.add_argument("--drive-steer", default=0.30, type=float)
-    parser.add_argument("--max-forward-speed", default=6.0, type=float)
-    parser.add_argument("--max-reverse-speed", default=2.0, type=float)
+    parser.add_argument("--throttle-ramp-rate", default=0.9, type=float)
+    parser.add_argument("--throttle-release-rate", default=2.5, type=float)
     return parser.parse_args()
 
 
