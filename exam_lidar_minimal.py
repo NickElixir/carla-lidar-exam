@@ -175,8 +175,7 @@ def distance_2d(a, b):
     return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
 
 
-def random_location_around_actor(actor_transform, min_radius, max_radius):
-    angle = random.uniform(0.0, 2.0 * np.pi)
+def random_location_around_actor(actor_transform, min_radius, max_radius, angle):
     radius = (random.uniform(min_radius ** 2, max_radius ** 2)) ** 0.5
     forward = actor_transform.get_forward_vector()
     right = actor_transform.get_right_vector()
@@ -201,8 +200,20 @@ def spawn_static_people(world, ego, args):
     people_min_distance = min(args.people_min_distance, people_radius)
     candidates = []
 
-    for _index in range(max(args.static_people * 30, 120)):
-        candidates.append(random_location_around_actor(ego_transform, people_min_distance, people_radius))
+    slots = max(args.static_people, 1)
+    sector_width = 2.0 * np.pi / slots
+    offset_angle = random.uniform(0.0, 2.0 * np.pi)
+    sector_ids = list(range(slots))
+    for _cycle in range(max(args.people_sector_cycles, 1)):
+        random.shuffle(sector_ids)
+        for sector_id in sector_ids:
+            angle = offset_angle + sector_width * sector_id + random.uniform(-0.45, 0.45) * sector_width
+            candidates.append(random_location_around_actor(
+                ego_transform,
+                people_min_distance,
+                people_radius,
+                angle,
+            ))
 
     attempts = 0
     fallback_candidates = []
@@ -219,10 +230,11 @@ def spawn_static_people(world, ego, args):
     random.shuffle(fallback_candidates)
     candidates.extend(fallback_candidates)
     people = []
+    target_transforms = []
     for location in candidates:
         if len(people) >= args.static_people:
             break
-        if any(distance_2d(location, person.get_location()) < 0.75 for person in people):
+        if any(distance_2d(location, target.location) < 0.75 for target in target_transforms):
             continue
         blueprint = random.choice(blueprints)
         if blueprint.has_attribute("is_invincible"):
@@ -232,14 +244,30 @@ def spawn_static_people(world, ego, args):
         if person is not None:
             person.apply_control(carla.WalkerControl(speed=0.0))
             people.append(person)
+            target_transforms.append(transform)
+
+    if people:
+        world.tick()
+        for person, transform in zip(people, target_transforms):
+            if person is None or not person.is_alive:
+                continue
+            person.set_transform(transform)
+            person.apply_control(carla.WalkerControl(speed=0.0))
+        world.tick()
+
+    actual_distances = [
+        distance_2d(person.get_location(), ego_location)
+        for person in people
+        if person is not None and person.is_alive
+    ]
 
     print(
-        "Spawned static pedestrians: %d/%d within %.1f m, distances=%s"
+        "Spawned static pedestrians: %d/%d within %.1f m, actual distances=%s"
         % (
             len(people),
             args.static_people,
             people_radius,
-            ", ".join("%.1f" % distance_2d(person.get_location(), ego_location) for person in people[:8]),
+            ", ".join("%.1f" % distance for distance in actual_distances[:8]),
         )
     )
     return people
@@ -1086,6 +1114,7 @@ def parse_args():
     parser.add_argument("--people-radius", default=10.0, type=float)
     parser.add_argument("--people-min-distance", default=2.0, type=float)
     parser.add_argument("--people-attempts", default=5000, type=int)
+    parser.add_argument("--people-sector-cycles", default=30, type=int)
     parser.add_argument("--lidar-channels", default=64, type=int)
     parser.add_argument("--lidar-range", default=100.0, type=float)
     parser.add_argument("--lidar-points-per-second", default=500000, type=int)
