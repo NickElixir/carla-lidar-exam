@@ -5,20 +5,21 @@ This guide explains how to run the CARLA LiDAR exam demo without any agents.
 The repository contains the Python client code and Conda environment exports.
 It does not contain the full CARLA simulator binaries, maps, or Unreal assets.
 
-## 1. Install CARLA 0.9.15
+## 1. Install CARLA 0.9.16
 
-On the target computer, install or copy CARLA 0.9.15 for Linux.
+On the target computer, install or copy CARLA 0.9.16 for Linux.
 
-The Python scripts expect the CARLA Python API egg to exist inside a CARLA
+The Conda YAML installs the CARLA Python API as `carla==0.9.16` from pip.
+Alternatively, the Python scripts can load the CARLA Python API egg from a
 simulator-style folder:
 
 ```text
-PythonAPI/carla/dist/carla-0.9.15-py3.7-linux-x86_64.egg
+PythonAPI/carla/dist/carla-0.9.16-*.whl
 ```
 
 If this repository is placed inside a full CARLA simulator folder, this path is
-already correct. If CARLA is installed elsewhere, either run the scripts from
-that full CARLA folder or copy this repository's client files into it.
+already correct. If CARLA is installed elsewhere, set `CARLA_ROOT` to that full
+CARLA folder before running the scripts.
 
 ## 2. Create The Conda Environment
 
@@ -26,34 +27,29 @@ Install Anaconda or Miniconda first. Then run:
 
 ```bash
 cd /path/to/carla-lidar-exam
-conda env create -f conda_env/carla0915_environment.yml
-conda activate carla0915
+conda env create -f conda_env/carla0916_environment.yml
+conda activate carla0916
 python --version
 ```
 
 Expected output:
 
 ```text
-Python 3.7.16
+Python 3.10.x
 ```
 
-For a stricter Linux x86_64 restore, use:
+The older CARLA 0.9.15 environment is still available as
+`conda_env/carla0915_environment.yml`, but the default launcher uses
+`carla0916`.
 
-```bash
-conda create -n carla0915 --file conda_env/carla0915_explicit_linux-64.txt
-conda activate carla0915
-python -m pip install -r conda_env/carla0915_pip_freeze.txt
-```
-
-The YAML restore is usually easier. The explicit restore is more exact but less
-portable.
+To force another environment for experiments, set `CARLA_CONDA_ENV`.
 
 ## 3. Check Python Dependencies
 
 From the repository or CARLA folder:
 
 ```bash
-conda run -n carla0915 python -m py_compile exam_lidar_minimal.py
+conda run -n carla0916 python -m py_compile exam_lidar_minimal.py
 ```
 
 If this passes, Python dependencies are available.
@@ -73,7 +69,7 @@ Wait until the simulator window is open and the map is loaded.
 In a second terminal:
 
 ```bash
-conda activate carla0915
+conda activate carla0916
 cd /path/to/full/CARLA_simulator_or_repo
 ./run_exam_lidar_minimal.sh
 ```
@@ -125,11 +121,21 @@ python -m json.tool exam_dataset/label/000000.json | head -80
 
 ## Common Issues
 
-If Python cannot import `carla`, make sure the CARLA Python egg path exists:
+If Python cannot import `carla`, make sure the package is installed:
 
 ```bash
-ls PythonAPI/carla/dist/carla-0.9.15-py3.7-linux-x86_64.egg
+python -m pip install carla==0.9.16
 ```
+
+Or point `CARLA_ROOT` to a simulator folder containing the matching Python API:
+
+```bash
+export CARLA_ROOT=/path/to/CARLA_0.9.16
+```
+
+If the script reports a client/server mismatch, the running simulator version
+does not match this environment. For this repository's default `carla0916`
+environment, start CARLA 0.9.16.
 
 If Open3D is slow or unstable:
 

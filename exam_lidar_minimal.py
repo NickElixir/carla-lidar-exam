@@ -15,15 +15,30 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def append_carla_api_path():
-    pattern = os.path.join(
-        SCRIPT_DIR,
-        "PythonAPI/carla/dist/carla-*%d.%d-%s.egg" % (
-            sys.version_info.major,
-            sys.version_info.minor,
-            "win-amd64" if os.name == "nt" else "linux-x86_64",
-        ),
+    py_tag = "cp%d%d" % (sys.version_info.major, sys.version_info.minor)
+    egg_name = "carla-*%d.%d-%s.egg" % (
+        sys.version_info.major,
+        sys.version_info.minor,
+        "win-amd64" if os.name == "nt" else "linux-x86_64",
     )
-    matches = glob.glob(pattern)
+    wheel_name = "carla-*%s-*%s*.whl" % (
+        py_tag,
+        "win_amd64" if os.name == "nt" else "x86_64",
+    )
+    candidates = [
+        os.path.join(SCRIPT_DIR, "PythonAPI/carla/dist", egg_name),
+        os.path.join(SCRIPT_DIR, "PythonAPI/carla/dist", wheel_name),
+        os.path.join(SCRIPT_DIR, "..", "PythonAPI/carla/dist", egg_name),
+        os.path.join(SCRIPT_DIR, "..", "PythonAPI/carla/dist", wheel_name),
+    ]
+    carla_root = os.environ.get("CARLA_ROOT")
+    if carla_root:
+        candidates.insert(0, os.path.join(carla_root, "PythonAPI/carla/dist", egg_name))
+        candidates.insert(1, os.path.join(carla_root, "PythonAPI/carla/dist", wheel_name))
+
+    matches = []
+    for pattern in candidates:
+        matches.extend(glob.glob(os.path.abspath(pattern)))
     if matches:
         sys.path.append(matches[0])
 
@@ -35,7 +50,9 @@ try:
 except ImportError as exc:
     raise RuntimeError(
         "Could not import CARLA Python API with Python %d.%d. "
-        "Use the carla0915 environment or install a matching carla package."
+        "Use a matching Conda environment, install the matching `carla` "
+        "package, or set CARLA_ROOT to a CARLA simulator folder containing "
+        "PythonAPI/carla/dist."
         % (sys.version_info.major, sys.version_info.minor)
     ) from exc
 
@@ -100,6 +117,32 @@ def destroy_existing_npcs(client, world):
     if actor_ids:
         client.apply_batch([carla.command.DestroyActor(actor_id) for actor_id in actor_ids])
     return len(actor_ids)
+
+
+def major_minor_patch(version):
+    parts = []
+    for part in str(version).split("."):
+        if not part.isdigit():
+            break
+        parts.append(int(part))
+        if len(parts) == 3:
+            break
+    return tuple(parts)
+
+
+def ensure_carla_version_compatible(client):
+    client_version = client.get_client_version()
+    server_version = client.get_server_version()
+    client_parts = major_minor_patch(client_version)
+    server_parts = major_minor_patch(server_version)
+    if client_parts and server_parts and client_parts[:3] != server_parts[:3]:
+        raise RuntimeError(
+            "CARLA client/server version mismatch: client API is %s, "
+            "simulator server is %s. Start a CARLA %s simulator for this "
+            "environment, or create a matching Python environment for the "
+            "running simulator."
+            % (client_version, server_version, client_version)
+        )
 
 
 def spawn_ego_vehicle(world, args):
@@ -175,29 +218,28 @@ def spawn_static_people(world, ego, args):
 
 def actor_bbox_vertices_in_lidar(actor, lidar_transform):
     bbox = actor.bounding_box
-    extent = bbox.extent
-    if extent.x <= 0.0 or extent.y <= 0.0 or extent.z <= 0.0:
+    world_vertices = bbox.get_world_vertices(actor.get_transform())
+    if len(world_vertices) != 8:
         return None
-    local_corners = np.array([
-        [-extent.x, -extent.y, -extent.z, 1.0],
-        [-extent.x, extent.y, -extent.z, 1.0],
-        [extent.x, -extent.y, -extent.z, 1.0],
-        [extent.x, extent.y, -extent.z, 1.0],
-        [-extent.x, -extent.y, extent.z, 1.0],
-        [-extent.x, extent.y, extent.z, 1.0],
-        [extent.x, -extent.y, extent.z, 1.0],
-        [extent.x, extent.y, extent.z, 1.0],
-    ], dtype=np.float64)
 
-    bbox_rotation = getattr(bbox, "rotation", carla.Rotation())
-    actor_matrix = np.array(actor.get_transform().get_matrix(), dtype=np.float64)
-    bbox_matrix = np.array(carla.Transform(bbox.location, bbox_rotation).get_matrix(), dtype=np.float64)
+    world_corners = np.array([
+        [vertex.x, vertex.y, vertex.z, 1.0]
+        for vertex in world_vertices
+    ], dtype=np.float64)
     sensor_inverse = np.array(lidar_transform.get_inverse_matrix(), dtype=np.float64)
-    lidar_corners = (sensor_inverse.dot(actor_matrix).dot(bbox_matrix).dot(local_corners.T)).T[:, :3]
+    lidar_corners = (sensor_inverse.dot(world_corners.T)).T[:, :3]
     lidar_corners[:, 1] = -lidar_corners[:, 1]
     if lidar_corners.shape != (8, 3) or not np.all(np.isfinite(lidar_corners)):
         return None
     return lidar_corners
+
+
+def bbox_dimensions_from_vertices(vertices):
+    return {
+        "x": float(np.linalg.norm(vertices[2] - vertices[0])),
+        "y": float(np.linalg.norm(vertices[1] - vertices[0])),
+        "z": float(np.linalg.norm(vertices[4] - vertices[0])),
+    }
 
 
 def build_bbox_lineset_data(actors, lidar_transform, max_distance=None):
@@ -453,7 +495,7 @@ def build_sustech_labels(actors, lidar_transform, max_distance=None):
         if vertices is None:
             continue
         center = np.mean(vertices, axis=0)
-        extent = actor.bounding_box.extent
+        dimensions = bbox_dimensions_from_vertices(vertices)
         forward = vertices[2] - vertices[0]
         yaw = float(np.arctan2(forward[1], forward[0]))
         flattened_vertices = []
@@ -467,11 +509,7 @@ def build_sustech_labels(actors, lidar_transform, max_distance=None):
                     "y": float(center[1]),
                     "z": float(center[2]),
                 },
-                "scale": {
-                    "x": float(2.0 * extent.x),
-                    "y": float(2.0 * extent.y),
-                    "z": float(2.0 * extent.z),
-                },
+                "scale": dimensions,
                 "rotation": {
                     "x": 0.0,
                     "y": 0.0,
@@ -729,6 +767,7 @@ def run(args):
 
     client = carla.Client(args.host, args.port)
     client.set_timeout(args.timeout)
+    ensure_carla_version_compatible(client)
     world = client.get_world()
     traffic_manager = client.get_trafficmanager(args.tm_port)
     original_settings = world.get_settings()
@@ -763,6 +802,10 @@ def run(args):
         print("Scene ready: ego=%d people=%d removed=%d" % (ego.id, len(people), removed_count))
         running = True
         while running:
+            if args.duration_seconds > 0.0 and time.time() - started_at >= args.duration_seconds:
+                running = False
+                continue
+
             if args.viewer == "pygame":
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
@@ -862,6 +905,7 @@ def parse_args():
     parser.add_argument("--height", default=720, type=int)
     parser.add_argument("--viewer", choices=("tk", "pygame", "spectator"), default="tk")
     parser.add_argument("--viewer-fps", default=15.0, type=float)
+    parser.add_argument("--duration-seconds", default=0.0, type=float)
     parser.add_argument("--no-open3d", action="store_true")
     parser.add_argument("--show-gt-boxes", action="store_true", default=True)
     parser.add_argument("--hide-gt-boxes", dest="show_gt_boxes", action="store_false")

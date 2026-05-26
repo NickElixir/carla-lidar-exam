@@ -1,4 +1,4 @@
-V# CARLA LiDAR Exam Reference
+# CARLA LiDAR Exam Reference
 
 This document explains the exam solution in this repository. It is written as a short reference for a live defense.
 
@@ -21,6 +21,9 @@ The main implementation is in:
 
 For setup on another computer, see `SETUP_MANUAL.md`. The Conda environment
 exports are stored in `conda_env/`.
+
+The default launcher now targets CARLA 0.9.16 with the `carla0916` Conda
+environment. The previous `carla0915` environment is kept for CARLA 0.9.15.
 
 ## How To Run
 
@@ -116,12 +119,10 @@ Shows the LiDAR point cloud in Open3D. It can also display Ground Truth 3D Bound
 The Ground Truth 3D boxes are not detected from the point cloud. They are taken directly from CARLA actor metadata:
 
 1. For each spawned pedestrian, read `actor.bounding_box`.
-2. Build the 8 local box corners from `bbox.extent`.
-3. Transform those corners from bounding-box local coordinates to actor coordinates.
-4. Transform them from actor coordinates to world coordinates.
-5. Transform them from world coordinates to the LiDAR sensor frame.
-6. Negate the Y axis so the boxes match the Open3D point cloud convention.
-7. Connect the 8 corners with 12 edges and draw them as an Open3D `LineSet`.
+2. Ask CARLA for the 8 world-space box corners with `bbox.get_world_vertices(actor.get_transform())`.
+3. Transform those vertices from world coordinates to the LiDAR sensor frame.
+4. Negate the Y axis so the boxes match the Open3D point cloud convention.
+5. Connect the 8 corners with 12 edges and draw them as an Open3D `LineSet`.
 
 In this repository that logic is implemented in:
 
@@ -205,7 +206,7 @@ CARLA uses its own coordinate system. Open3D uses a different convention. The sc
 
 - LiDAR points are read in the sensor frame;
 - the Y coordinate is negated for Open3D visualization;
-- actor bounding box vertices are transformed from actor space to world space, then from world space to LiDAR space;
+- actor bounding box vertices come from CARLA in world space via `get_world_vertices(actor.get_transform())`, then are transformed from world space to LiDAR space;
 - the same Y conversion is applied to boxes.
 
 ## Performance Notes

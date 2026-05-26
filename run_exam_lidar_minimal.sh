@@ -10,7 +10,9 @@ if [[ -n "${DISPLAY:-}" && -z "${SDL_VIDEODRIVER:-}" ]]; then
   export SDL_VIDEODRIVER=x11
 fi
 
-exec conda run --no-capture-output -n carla0915 python exam_lidar_minimal.py \
+CARLA_CONDA_ENV="${CARLA_CONDA_ENV:-carla0916}"
+
+exec conda run --no-capture-output -n "$CARLA_CONDA_ENV" python exam_lidar_minimal.py \
   --viewer tk \
   --width 800 \
   --height 450 \

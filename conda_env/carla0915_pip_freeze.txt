@@ -21,6 +21,7 @@ attrs==24.2.0
 backcall==0.2.0
 bond==4.1.4
 builtin-interfaces==1.2.2
+carla==0.9.15
 certifi @ file:///croot/certifi_1671487769961/work/certifi
 charset-normalizer==3.4.7
 click==8.1.8
@@ -223,4 +224,3 @@ Werkzeug==2.2.3
 widgetsnbextension==4.0.15
 xacro==2.1.1
 zipp==3.15.0
-

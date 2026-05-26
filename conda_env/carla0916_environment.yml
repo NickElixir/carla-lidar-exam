@@ -1,0 +1,13 @@
+name: carla0916
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - tk
+  - pip:
+      - carla==0.9.16
+      - numpy
+      - open3d
+      - pillow
+      - pygame

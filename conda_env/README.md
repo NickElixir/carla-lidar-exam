@@ -1,7 +1,10 @@
-# CARLA 0.9.15 Conda Environment
+# CARLA Conda Environments
 
-This folder contains exports of the `carla0915` Conda environment used by the
-CARLA demo scripts in this repository.
+This folder contains Conda environment files for the CARLA demo scripts in this
+repository.
+
+- `carla0916_environment.yml` is the default environment for CARLA 0.9.16.
+- `carla0915_environment.yml` is kept for CARLA 0.9.15 compatibility.
 
 ## Recommended Restore
 
@@ -9,25 +12,26 @@ On another computer with Anaconda or Miniconda installed:
 
 ```bash
 cd /path/to/carla-lidar-exam
-conda env create -f conda_env/carla0915_environment.yml
-conda activate carla0915
+conda env create -f conda_env/carla0916_environment.yml
+conda activate carla0916
 python --version
 ```
 
 Expected Python version:
 
 ```text
-Python 3.7.16
+Python 3.10.x
 ```
 
-The CARLA Python API itself is not installed from pip. The demo scripts add the
-bundled repository egg from:
+The CARLA Python API is installed as `carla==0.9.16` from pip by the YAML file.
+The demo scripts can also add a simulator wheel from:
 
 ```text
-PythonAPI/carla/dist/carla-0.9.15-py3.7-linux-x86_64.egg
+PythonAPI/carla/dist/carla-0.9.16-*.whl
 ```
 
-So keep this repository layout intact when copying it to the other machine.
+If you use a manually installed simulator API instead of the pip package, keep
+that layout intact or set `CARLA_ROOT` to the CARLA 0.9.16 simulator folder.
 
 ## Exact Linux Restore
 
@@ -47,7 +51,7 @@ move between machines.
 After restoring:
 
 ```bash
-conda run -n carla0915 python -m py_compile exam_lidar_minimal.py
+conda run -n carla0916 python -m py_compile exam_lidar_minimal.py
 ./CarlaUE4.sh
 ```
 
@@ -56,3 +60,7 @@ Then in another terminal:
 ```bash
 ./run_exam_lidar_minimal.sh
 ```
+
+The Python API and simulator server must be the same CARLA version. This
+default environment is for CARLA 0.9.16. To run against CARLA 0.9.15, use
+`CARLA_CONDA_ENV=carla0915 ./run_exam_lidar_minimal.sh` with a 0.9.15 server.
