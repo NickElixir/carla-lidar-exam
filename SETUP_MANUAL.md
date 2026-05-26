@@ -143,6 +143,16 @@ If Open3D is slow or unstable:
 ./run_exam_lidar_minimal.sh --no-open3d
 ```
 
+The default launcher uses dense LiDAR settings:
+
+```bash
+--lidar-points-per-second 500000 --open3d-max-points 500000
+```
+
+For less noisy/smeared demo visuals, the script disables camera post-processing
+and sets LiDAR noise/dropoff attributes to zero when the active CARLA blueprint
+supports those attributes.
+
 If the LiDAR scan looks split or incomplete, keep the LiDAR rotation frequency
 aligned with the synchronous timestep. For example:
 

@@ -94,6 +94,13 @@ BOX_EDGES = np.array([
     (0, 4), (1, 5), (2, 6), (3, 7),
 ], dtype=np.int32)
 
+MAX_PEOPLE_RADIUS = 10.0
+
+
+def set_blueprint_attribute_if_present(blueprint, name, value):
+    if blueprint.has_attribute(name):
+        blueprint.set_attribute(name, str(value))
+
 
 def get_blueprints(world, pattern, generation):
     blueprints = world.get_blueprint_library().filter(pattern)
@@ -174,6 +181,8 @@ def spawn_static_people(world, ego, args):
         raise RuntimeError("No pedestrian blueprints matched %s" % args.people_filter)
 
     ego_location = ego.get_location()
+    people_radius = min(args.people_radius, MAX_PEOPLE_RADIUS)
+    people_min_distance = min(args.people_min_distance, people_radius)
     candidates = []
     attempts = 0
     while len(candidates) < args.static_people * 6 and attempts < args.people_attempts:
@@ -182,11 +191,11 @@ def spawn_static_people(world, ego, args):
         if location is None:
             continue
         distance = distance_2d(location, ego_location)
-        if args.people_min_distance <= distance <= args.people_radius:
+        if people_min_distance <= distance <= people_radius:
             candidates.append(location)
 
     if len(candidates) < args.static_people:
-        distances = np.linspace(args.people_min_distance, args.people_radius, num=4)
+        distances = np.linspace(people_min_distance, people_radius, num=4)
         for distance in distances:
             for index in range(max(args.static_people * 3, 24)):
                 angle = 2.0 * np.pi * index / max(args.static_people * 3, 24)
@@ -212,7 +221,10 @@ def spawn_static_people(world, ego, args):
             person.apply_control(carla.WalkerControl(speed=0.0))
             people.append(person)
 
-    print("Spawned static pedestrians: %d/%d" % (len(people), args.static_people))
+    print(
+        "Spawned static pedestrians: %d/%d within %.1f m"
+        % (len(people), args.static_people, people_radius)
+    )
     return people
 
 
@@ -234,6 +246,65 @@ def actor_bbox_vertices_in_lidar(actor, lidar_transform):
     return lidar_corners
 
 
+def actor_lidar_points_refined_vertices(actor, lidar_transform, lidar_points, object_ids, min_points=6):
+    if lidar_points is None or object_ids is None:
+        return None
+    mask = object_ids == actor.id
+    if int(np.count_nonzero(mask)) < min_points:
+        return None
+
+    actor_points = np.asarray(lidar_points[mask], dtype=np.float64)
+    sensor_points = np.column_stack((
+        actor_points[:, 0],
+        -actor_points[:, 1],
+        actor_points[:, 2],
+        np.ones(len(actor_points), dtype=np.float64),
+    ))
+    sensor_matrix = np.array(lidar_transform.get_matrix(), dtype=np.float64)
+    actor_inverse = np.array(actor.get_transform().get_inverse_matrix(), dtype=np.float64)
+    local_points = (actor_inverse.dot(sensor_matrix).dot(sensor_points.T)).T[:, :3]
+    if local_points.size == 0 or not np.all(np.isfinite(local_points)):
+        return None
+
+    base_world_vertices = actor.bounding_box.get_world_vertices(actor.get_transform())
+    base_world_corners = np.array([
+        [vertex.x, vertex.y, vertex.z, 1.0]
+        for vertex in base_world_vertices
+    ], dtype=np.float64)
+    base_local_points = (actor_inverse.dot(base_world_corners.T)).T[:, :3]
+
+    combined_local_points = np.vstack((base_local_points, local_points))
+    lower = combined_local_points.min(axis=0)
+    upper = combined_local_points.max(axis=0)
+    if np.any(upper - lower <= 0.01):
+        return None
+
+    local_corners = np.array([
+        [lower[0], lower[1], lower[2], 1.0],
+        [lower[0], upper[1], lower[2], 1.0],
+        [upper[0], lower[1], lower[2], 1.0],
+        [upper[0], upper[1], lower[2], 1.0],
+        [lower[0], lower[1], upper[2], 1.0],
+        [lower[0], upper[1], upper[2], 1.0],
+        [upper[0], lower[1], upper[2], 1.0],
+        [upper[0], upper[1], upper[2], 1.0],
+    ], dtype=np.float64)
+    actor_matrix = np.array(actor.get_transform().get_matrix(), dtype=np.float64)
+    sensor_inverse = np.array(lidar_transform.get_inverse_matrix(), dtype=np.float64)
+    lidar_corners = (sensor_inverse.dot(actor_matrix).dot(local_corners.T)).T[:, :3]
+    lidar_corners[:, 1] = -lidar_corners[:, 1]
+    if lidar_corners.shape != (8, 3) or not np.all(np.isfinite(lidar_corners)):
+        return None
+    return lidar_corners
+
+
+def actor_best_bbox_vertices_in_lidar(actor, lidar_transform, lidar_points=None, object_ids=None):
+    refined_vertices = actor_lidar_points_refined_vertices(actor, lidar_transform, lidar_points, object_ids)
+    if refined_vertices is not None:
+        return refined_vertices
+    return actor_bbox_vertices_in_lidar(actor, lidar_transform)
+
+
 def bbox_dimensions_from_vertices(vertices):
     return {
         "x": float(np.linalg.norm(vertices[2] - vertices[0])),
@@ -242,7 +313,7 @@ def bbox_dimensions_from_vertices(vertices):
     }
 
 
-def build_bbox_lineset_data(actors, lidar_transform, max_distance=None):
+def build_bbox_lineset_data(actors, lidar_transform, max_distance=None, lidar_points=None, object_ids=None):
     points = []
     lines = []
     colors = []
@@ -254,7 +325,7 @@ def build_bbox_lineset_data(actors, lidar_transform, max_distance=None):
         if max_distance is not None and actor.get_location().distance(lidar_transform.location) > max_distance:
             continue
         base_index = len(points)
-        vertices = actor_bbox_vertices_in_lidar(actor, lidar_transform)
+        vertices = actor_best_bbox_vertices_in_lidar(actor, lidar_transform, lidar_points, object_ids)
         if vertices is None:
             continue
         points.extend(vertices.tolist())
@@ -283,6 +354,8 @@ class CameraSensor(object):
         blueprint.set_attribute("image_size_x", str(width))
         blueprint.set_attribute("image_size_y", str(height))
         blueprint.set_attribute("fov", "100")
+        set_blueprint_attribute_if_present(blueprint, "enable_postprocess_effects", "false")
+        set_blueprint_attribute_if_present(blueprint, "motion_blur_intensity", "0.0")
         transform = carla.Transform(carla.Location(x=-6.0, z=2.8), carla.Rotation(pitch=-14.0))
         self.sensor = world.spawn_actor(
             blueprint,
@@ -320,6 +393,7 @@ class SemanticLidar(object):
         self.lock = threading.Lock()
         self.points = None
         self.colors = None
+        self.object_ids = None
         self.frame = 0
         self.max_points = args.open3d_max_points
         self.keep_points_for_viewer = not args.no_open3d or args.save_dataset
@@ -330,6 +404,15 @@ class SemanticLidar(object):
         blueprint.set_attribute("rotation_frequency", str(args.lidar_rotation_frequency))
         blueprint.set_attribute("upper_fov", str(args.lidar_upper_fov))
         blueprint.set_attribute("lower_fov", str(args.lidar_lower_fov))
+        set_blueprint_attribute_if_present(blueprint, "noise_stddev", args.lidar_noise_stddev)
+        set_blueprint_attribute_if_present(blueprint, "dropoff_general_rate", args.lidar_dropoff_general_rate)
+        set_blueprint_attribute_if_present(blueprint, "dropoff_intensity_limit", args.lidar_dropoff_intensity_limit)
+        set_blueprint_attribute_if_present(blueprint, "dropoff_zero_intensity", args.lidar_dropoff_zero_intensity)
+        set_blueprint_attribute_if_present(
+            blueprint,
+            "atmosphere_attenuation_rate",
+            args.lidar_atmosphere_attenuation_rate,
+        )
         z = ego.bounding_box.extent.z + args.lidar_z_offset
         transform = carla.Transform(carla.Location(z=z))
         self.sensor = world.spawn_actor(
@@ -363,15 +446,21 @@ class SemanticLidar(object):
         points = np.column_stack((raw_view["x"], -raw_view["y"], raw_view["z"])).astype(np.float64)
         labels = np.clip(raw_view["object_tag"].astype(np.int32), 0, len(SEMANTIC_COLORS) - 1)
         colors = SEMANTIC_COLORS[labels]
+        object_ids = raw_view["object_idx"].astype(np.uint32).copy()
         with self.lock:
             self.points = points
             self.colors = colors
+            self.object_ids = object_ids
             self.frame = data.frame
 
-    def snapshot(self):
+    def snapshot(self, include_object_ids=False):
         with self.lock:
             if self.points is None:
+                if include_object_ids:
+                    return None, None, None, self.frame
                 return None, None, self.frame
+            if include_object_ids:
+                return self.points, self.colors, self.object_ids, self.frame
             return self.points, self.colors, self.frame
 
     def destroy(self):
@@ -419,7 +508,7 @@ class Open3DView(object):
         else:
             self.visualizer.update_geometry(self.point_cloud)
 
-        if box_data is not None and not self.box_lines_failed:
+        if box_data is not None and box_data[0] is not None and not self.box_lines_failed:
             box_points, box_lines, box_colors = box_data
             try:
                 self.box_lines.points = self.o3d.utility.Vector3dVector(box_points)
@@ -483,7 +572,7 @@ class DatasetWriter(object):
                 pcd_file.write("%.6f %.6f %.6f\n" % (x, y, z))
 
 
-def build_sustech_labels(actors, lidar_transform, max_distance=None):
+def build_sustech_labels(actors, lidar_transform, max_distance=None, lidar_points=None, object_ids=None):
     labels = []
     for actor in actors:
         if actor is None or not actor.is_alive:
@@ -491,7 +580,7 @@ def build_sustech_labels(actors, lidar_transform, max_distance=None):
         if max_distance is not None and actor.get_location().distance(lidar_transform.location) > max_distance:
             continue
 
-        vertices = actor_bbox_vertices_in_lidar(actor, lidar_transform)
+        vertices = actor_best_bbox_vertices_in_lidar(actor, lidar_transform, lidar_points, object_ids)
         if vertices is None:
             continue
         center = np.mean(vertices, axis=0)
@@ -523,7 +612,7 @@ def build_sustech_labels(actors, lidar_transform, max_distance=None):
     return labels
 
 
-def apply_manual_control(vehicle, keys):
+def apply_manual_control(vehicle, keys, args):
     control = carla.VehicleControl()
     velocity = vehicle.get_velocity()
     forward = vehicle.get_transform().get_forward_vector()
@@ -532,18 +621,22 @@ def apply_manual_control(vehicle, keys):
     wants_reverse = "s" in keys or "down" in keys
 
     if wants_forward:
-        control.throttle = 0.65
-        control.brake = 0.0
+        if longitudinal_speed >= args.max_forward_speed:
+            control.throttle = 0.0
+            control.brake = 0.08
+        else:
+            control.throttle = args.drive_throttle
+            control.brake = 0.0
         control.reverse = False
         control.gear = 1
     elif wants_reverse:
         if longitudinal_speed > 0.25:
             control.throttle = 0.0
-            control.brake = 0.9
+            control.brake = args.drive_brake
             control.reverse = False
             control.gear = 1
         else:
-            control.throttle = 0.45
+            control.throttle = 0.0 if abs(longitudinal_speed) >= args.max_reverse_speed else args.reverse_throttle
             control.brake = 0.0
             control.reverse = True
             control.gear = -1
@@ -553,9 +646,9 @@ def apply_manual_control(vehicle, keys):
         control.reverse = False
         control.gear = 1
 
-    control.steer = -0.45 if "a" in keys or "left" in keys else 0.0
+    control.steer = -args.drive_steer if "a" in keys or "left" in keys else 0.0
     if "d" in keys or "right" in keys:
-        control.steer = 0.45
+        control.steer = args.drive_steer
     control.hand_brake = "space" in keys
     vehicle.apply_control(control)
 
@@ -818,7 +911,7 @@ def run(args):
             else:
                 keys = set()
 
-            apply_manual_control(ego, keys)
+            apply_manual_control(ego, keys, args)
             follow_with_spectator(world, ego)
             world.tick()
 
@@ -826,11 +919,18 @@ def run(args):
             lidar_frame = lidar.frame
             points = None
             colors = None
+            object_ids = None
             box_data = None
             if open3d_view is not None:
-                points, colors, lidar_frame = lidar.snapshot()
+                points, colors, object_ids, lidar_frame = lidar.snapshot(include_object_ids=True)
                 if args.show_gt_boxes:
-                    box_data = build_bbox_lineset_data(people, lidar.sensor.get_transform(), args.lidar_range)
+                    box_data = build_bbox_lineset_data(
+                        people,
+                        lidar.sensor.get_transform(),
+                        args.lidar_range,
+                        points,
+                        object_ids,
+                    )
             if open3d_view is not None:
                 open3d_view.tick(points, colors, box_data)
 
@@ -844,8 +944,13 @@ def run(args):
             )
             if save_requested:
                 if points is None:
-                    points, _colors, lidar_frame = lidar.snapshot()
-                labels = build_sustech_labels(people, lidar.sensor.get_transform())
+                    points, _colors, object_ids, lidar_frame = lidar.snapshot(include_object_ids=True)
+                labels = build_sustech_labels(
+                    people,
+                    lidar.sensor.get_transform(),
+                    lidar_points=points,
+                    object_ids=object_ids,
+                )
                 if points is not None and len(points) > 0:
                     dataset_writer.save(points, labels)
                     saved_once = True
@@ -914,7 +1019,7 @@ def parse_args():
     parser.add_argument("--dataset-dir", default=os.path.join(SCRIPT_DIR, "exam_dataset"))
     parser.add_argument("--dataset-every-n-frames", default=0, type=int)
     parser.add_argument("--open3d-update-hz", default=10.0, type=float)
-    parser.add_argument("--open3d-max-points", default=80000, type=int)
+    parser.add_argument("--open3d-max-points", default=500000, type=int)
     parser.add_argument("--fixed-delta-seconds", default=0.05, type=float)
     parser.add_argument("--clear-existing-npcs", action="store_true")
     parser.add_argument("--vehicle-filter", default="vehicle.*")
@@ -931,7 +1036,18 @@ def parse_args():
     parser.add_argument("--lidar-rotation-frequency", default=20.0, type=float)
     parser.add_argument("--lidar-upper-fov", default=10.0, type=float)
     parser.add_argument("--lidar-lower-fov", default=-30.0, type=float)
+    parser.add_argument("--lidar-noise-stddev", default=0.0, type=float)
+    parser.add_argument("--lidar-dropoff-general-rate", default=0.0, type=float)
+    parser.add_argument("--lidar-dropoff-intensity-limit", default=1.0, type=float)
+    parser.add_argument("--lidar-dropoff-zero-intensity", default=0.0, type=float)
+    parser.add_argument("--lidar-atmosphere-attenuation-rate", default=0.0, type=float)
     parser.add_argument("--lidar-z-offset", default=0.6, type=float)
+    parser.add_argument("--drive-throttle", default=0.35, type=float)
+    parser.add_argument("--reverse-throttle", default=0.35, type=float)
+    parser.add_argument("--drive-brake", default=0.55, type=float)
+    parser.add_argument("--drive-steer", default=0.30, type=float)
+    parser.add_argument("--max-forward-speed", default=6.0, type=float)
+    parser.add_argument("--max-reverse-speed", default=2.0, type=float)
     return parser.parse_args()
 
 

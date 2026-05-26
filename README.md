@@ -24,6 +24,8 @@ exports are stored in `conda_env/`.
 
 The default launcher now targets CARLA 0.9.16 with the `carla0916` Conda
 environment. The previous `carla0915` environment is kept for CARLA 0.9.15.
+The default LiDAR settings use `500000` points per second and keep up to
+`500000` points in the Open3D cloud.
 
 ## How To Run
 
@@ -120,9 +122,10 @@ The Ground Truth 3D boxes are not detected from the point cloud. They are taken 
 
 1. For each spawned pedestrian, read `actor.bounding_box`.
 2. Ask CARLA for the 8 world-space box corners with `bbox.get_world_vertices(actor.get_transform())`.
-3. Transform those vertices from world coordinates to the LiDAR sensor frame.
-4. Negate the Y axis so the boxes match the Open3D point cloud convention.
-5. Connect the 8 corners with 12 edges and draw them as an Open3D `LineSet`.
+3. If semantic LiDAR points for the same `object_idx` are available, transform those points into the actor-local frame and expand the 8-vertex box only when observed points fall outside the CARLA box.
+4. Transform the final 8 vertices from world coordinates to the LiDAR sensor frame.
+5. Negate the Y axis so the boxes match the Open3D point cloud convention.
+6. Connect the 8 corners with 12 edges and draw them as an Open3D `LineSet`.
 
 In this repository that logic is implemented in:
 
@@ -207,6 +210,7 @@ CARLA uses its own coordinate system. Open3D uses a different convention. The sc
 - LiDAR points are read in the sensor frame;
 - the Y coordinate is negated for Open3D visualization;
 - actor bounding box vertices come from CARLA in world space via `get_world_vertices(actor.get_transform())`, then are transformed from world space to LiDAR space;
+- pedestrian boxes can be refined by semantic LiDAR `object_idx` points without shrinking below the CARLA 8-vertex box;
 - the same Y conversion is applied to boxes.
 
 ## Performance Notes
