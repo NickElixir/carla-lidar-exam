@@ -24,7 +24,7 @@ exec conda run --no-capture-output -n "$CARLA_CONDA_ENV" python exam_lidar_minim
   --fixed-delta-seconds 0.05 \
   --clear-existing-npcs \
   --static-people 20 \
-  --people-radius 10 \
+  --people-radius 8 \
   --people-min-distance 2 \
   --lidar-noise-stddev 0.0 \
   --lidar-dropoff-general-rate 0.0 \

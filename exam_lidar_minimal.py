@@ -175,6 +175,21 @@ def distance_2d(a, b):
     return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
 
 
+def random_location_around_actor(actor_transform, min_radius, max_radius):
+    angle = random.uniform(0.0, 2.0 * np.pi)
+    radius = (random.uniform(min_radius ** 2, max_radius ** 2)) ** 0.5
+    forward = actor_transform.get_forward_vector()
+    right = actor_transform.get_right_vector()
+    location = actor_transform.location
+    offset_x = radius * np.cos(angle)
+    offset_y = radius * np.sin(angle)
+    return carla.Location(
+        x=location.x + forward.x * offset_x + right.x * offset_y,
+        y=location.y + forward.y * offset_x + right.y * offset_y,
+        z=location.z + 0.5,
+    )
+
+
 def spawn_static_people(world, ego, args):
     blueprints = get_blueprints(world, args.people_filter, args.people_generation)
     if not blueprints:
@@ -182,45 +197,32 @@ def spawn_static_people(world, ego, args):
 
     ego_location = ego.get_location()
     ego_transform = ego.get_transform()
-    forward = ego_transform.get_forward_vector()
-    right = ego_transform.get_right_vector()
     people_radius = min(args.people_radius, MAX_PEOPLE_RADIUS)
     people_min_distance = min(args.people_min_distance, people_radius)
     candidates = []
 
-    slots = max(args.static_people * 4, 32)
-    for index in range(slots):
-        ring = index // max(args.static_people, 1)
-        angle = 2.0 * np.pi * (index % max(args.static_people, 1)) / max(args.static_people, 1)
-        angle += random.uniform(-0.18, 0.18)
-        radius_fraction = (ring + 1.0) / max(slots // max(args.static_people, 1), 1)
-        radius = people_min_distance + (people_radius - people_min_distance) * radius_fraction
-        radius += random.uniform(-0.35, 0.35)
-        radius = min(max(radius, people_min_distance), people_radius)
-        offset_x = radius * np.cos(angle)
-        offset_y = radius * np.sin(angle)
-        candidates.append(carla.Location(
-            x=ego_location.x + forward.x * offset_x + right.x * offset_y,
-            y=ego_location.y + forward.y * offset_x + right.y * offset_y,
-            z=ego_location.z + 0.5,
-        ))
+    for _index in range(max(args.static_people * 30, 120)):
+        candidates.append(random_location_around_actor(ego_transform, people_min_distance, people_radius))
 
     attempts = 0
-    while len(candidates) < args.static_people * 8 and attempts < args.people_attempts:
+    fallback_candidates = []
+    while len(fallback_candidates) < args.static_people * 6 and attempts < args.people_attempts:
         attempts += 1
         location = world.get_random_location_from_navigation()
         if location is None:
             continue
         distance = distance_2d(location, ego_location)
         if people_min_distance <= distance <= people_radius:
-            candidates.append(location)
+            fallback_candidates.append(location)
 
-    candidates.sort(key=lambda location: distance_2d(location, ego_location))
+    random.shuffle(candidates)
+    random.shuffle(fallback_candidates)
+    candidates.extend(fallback_candidates)
     people = []
     for location in candidates:
         if len(people) >= args.static_people:
             break
-        if any(distance_2d(location, person.get_location()) < 1.0 for person in people):
+        if any(distance_2d(location, person.get_location()) < 0.75 for person in people):
             continue
         blueprint = random.choice(blueprints)
         if blueprint.has_attribute("is_invincible"):
@@ -232,8 +234,13 @@ def spawn_static_people(world, ego, args):
             people.append(person)
 
     print(
-        "Spawned static pedestrians: %d/%d within %.1f m"
-        % (len(people), args.static_people, people_radius)
+        "Spawned static pedestrians: %d/%d within %.1f m, distances=%s"
+        % (
+            len(people),
+            args.static_people,
+            people_radius,
+            ", ".join("%.1f" % distance_2d(person.get_location(), ego_location) for person in people[:8]),
+        )
     )
     return people
 

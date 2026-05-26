@@ -149,6 +149,9 @@ The default launcher uses dense LiDAR settings:
 --lidar-points-per-second 500000 --open3d-max-points 500000
 ```
 
+It also spawns pedestrians randomly around the ego vehicle with
+`--people-radius 8`; values above `10 m` are capped by the script.
+
 For less noisy/smeared demo visuals, the script disables camera post-processing
 and sets LiDAR noise/dropoff attributes to zero when the active CARLA blueprint
 supports those attributes.

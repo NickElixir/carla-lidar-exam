@@ -26,8 +26,8 @@ The default launcher now targets CARLA 0.9.16 with the `carla0916` Conda
 environment. The previous `carla0915` environment is kept for CARLA 0.9.15.
 The default LiDAR settings use `500000` points per second and keep up to
 `500000` points in the Open3D cloud.
-Pedestrians are spawned in a ring around the ego vehicle and capped to a
-maximum radius of `10 m`.
+Pedestrians are spawned at random positions around the ego vehicle. The default
+launcher uses an `8 m` radius, and the script caps any larger value to `10 m`.
 
 ## How To Run
 
