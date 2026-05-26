@@ -171,6 +171,35 @@ Verified features:
 - GT 3D boxes;
 - dataset export with PCD and SUSTechPOINTS-like JSON labels.
 
+## Follow-up Notes
+
+Two practical follow-up clarifications were added after the first export.
+
+`LiDAR split in half`
+
+The likely cause is mismatch between simulation timestep and LiDAR rotation frequency. A clean full sweep per tick usually needs:
+
+- `lidar_rotation_frequency = 1 / fixed_delta_seconds`
+
+Examples:
+
+- `fixed_delta_seconds=0.1` with `lidar_rotation_frequency=10`
+- `fixed_delta_seconds=0.05` with `lidar_rotation_frequency=20`
+
+This repository now keeps the default exam launcher at:
+
+- `--fixed-delta-seconds 0.1`
+- `--lidar-rotation-frequency 10`
+
+`Pedestrian distance`
+
+The exam scene was tightened so that randomly spawned pedestrians stay close to the ego vehicle:
+
+- max distance: `10 m`
+- min distance: `2 m`
+
+This is now reflected both in the Python defaults and in `run_exam_lidar_minimal.sh`.
+
 ## Useful Commands
 
 Run CARLA:
@@ -222,4 +251,3 @@ print("labels:", len(labels))
 print("types:", sorted(set(x["obj_type"] for x in labels)))
 PY
 ```
-

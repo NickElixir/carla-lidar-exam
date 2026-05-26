@@ -19,7 +19,9 @@ exec conda run --no-capture-output -n carla0915 python exam_lidar_minimal.py \
   --open3d-max-points 30000 \
   --lidar-points-per-second 100000 \
   --lidar-rotation-frequency 10 \
-  --fixed-delta-seconds 0.05 \
+  --fixed-delta-seconds 0.1 \
   --clear-existing-npcs \
   --static-people 20 \
+  --people-radius 10 \
+  --people-min-distance 2 \
   "$@"

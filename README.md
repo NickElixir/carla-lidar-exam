@@ -19,6 +19,9 @@ The main implementation is in:
 - `run_exam_lidar_minimal.sh`
 - `run_exam_lidar_dataset.sh`
 
+For setup on another computer, see `SETUP_MANUAL.md`. The Conda environment
+exports are stored in `conda_env/`.
+
 ## How To Run
 
 Start the CARLA server first:
@@ -94,7 +97,7 @@ Creates one ego vehicle from the CARLA blueprint library. The vehicle role name 
 
 `spawn_static_people()`
 
-Creates static pedestrians near the ego vehicle. The script tries navigation points first. If there are not enough points, it uses fallback positions around the vehicle.
+Creates static pedestrians near the ego vehicle. The current default exam setup keeps them within `10 m` from the ego vehicle, with a minimum distance of `2 m`. The script tries navigation points first. If there are not enough points, it uses fallback positions around the vehicle.
 
 `CameraSensor`
 
@@ -107,6 +110,68 @@ Creates a semantic LiDAR attached to the ego vehicle. Semantic LiDAR gives both 
 `Open3DView`
 
 Shows the LiDAR point cloud in Open3D. It can also display Ground Truth 3D Bounding Boxes as yellow line boxes.
+
+## How GT 3D Boxes Are Built In Open3D
+
+The Ground Truth 3D boxes are not detected from the point cloud. They are taken directly from CARLA actor metadata:
+
+1. For each spawned pedestrian, read `actor.bounding_box`.
+2. Build the 8 local box corners from `bbox.extent`.
+3. Transform those corners from bounding-box local coordinates to actor coordinates.
+4. Transform them from actor coordinates to world coordinates.
+5. Transform them from world coordinates to the LiDAR sensor frame.
+6. Negate the Y axis so the boxes match the Open3D point cloud convention.
+7. Connect the 8 corners with 12 edges and draw them as an Open3D `LineSet`.
+
+In this repository that logic is implemented in:
+
+- `actor_bbox_vertices_in_lidar()`
+- `build_bbox_lineset_data()`
+- `Open3DView.tick()`
+
+So during the defense you can say that the point cloud is sensor data, while the yellow 3D boxes are simulator ground truth projected into the LiDAR frame.
+
+## Why LiDAR Can Look Split In Half
+
+If the LiDAR image looks incomplete or like two separate halves, the first thing to check is synchronization between:
+
+- `fixed_delta_seconds`
+- `lidar_rotation_frequency`
+
+One full LiDAR revolution per simulation tick gives the cleanest frame for visualization. In the current launcher:
+
+- `--fixed-delta-seconds 0.1`
+- `--lidar-rotation-frequency 10`
+
+This is synchronized because `1 / 0.1 = 10 Hz`.
+
+If you use `--fixed-delta-seconds 0.05`, then a matching LiDAR frequency would usually be `20 Hz`.
+
+Other possible reasons for a broken or discontinuous scan:
+
+- Open3D updates are slower than incoming LiDAR frames.
+- `points_per_second` is too low, so the sweep looks sparse.
+- only one partial sweep is shown instead of accumulated frames;
+- the ego vehicle or objects move during a sweep, causing motion distortion;
+- downsampling removes too many points for the viewer;
+- async settings or mixed tick timing cause sensor/viewer desynchronization.
+
+## Possible Demo Problems
+
+The most realistic issues during a live demo are:
+
+- Open3D window opens slowly or crashes on a weaker machine.
+- A different Python environment cannot import CARLA or Open3D.
+- The LiDAR sweep looks sparse or visually torn because of frequency/timestep mismatch.
+- Some pedestrians fail to spawn if the current map area has poor nearby navigation points.
+- Ground truth boxes may disappear if Open3D rejects the `LineSet` update.
+- The camera window works, but keyboard focus is on another window.
+
+Simple backup plan for the demo:
+
+- run `./run_exam_lidar_minimal.sh --no-open3d` if Open3D is unstable;
+- run `./run_exam_lidar_minimal.sh --hide-gt-boxes` if only the GT boxes are problematic;
+- use `./run_exam_lidar_dataset.sh` to prove that LiDAR and labels are generated even without the live 3D viewer.
 
 `DatasetWriter`
 
@@ -183,4 +248,3 @@ The solution uses CARLA as the simulator and Python as the client. The client cr
 Semantic LiDAR is useful because it provides ground truth information per point. For object-level ground truth, the script uses CARLA actor bounding boxes and transforms them into the LiDAR coordinate frame.
 
 The dataset export separates point cloud data and labels. This is similar to common 3D detection datasets, where LiDAR frames and object annotations are stored as separate files.
-
