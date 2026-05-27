@@ -42,7 +42,7 @@ except ImportError as exc:
 import numpy as np
 import pygame
 from pygame.locals import K_a, K_d, K_DOWN, K_ESCAPE, K_LEFT, K_RIGHT
-from pygame.locals import K_s, K_SPACE, K_UP, K_w
+from pygame.locals import K_l, K_r, K_s, K_SPACE, K_UP, K_w
 
 
 SEMANTIC_COLORS = np.array([
@@ -131,35 +131,23 @@ def spawn_static_people(world, ego, args):
         raise RuntimeError("No pedestrian blueprints matched %s" % args.people_filter)
 
     ego_location = ego.get_location()
-    candidates = []
-    attempts = 0
-    while len(candidates) < args.static_people * 6 and attempts < args.people_attempts:
-        attempts += 1
-        location = world.get_random_location_from_navigation()
-        if location is None:
-            continue
-        distance = distance_2d(location, ego_location)
-        if args.people_min_distance <= distance <= args.people_radius:
-            candidates.append(location)
-
-    if len(candidates) < args.static_people:
-        distances = np.linspace(args.people_min_distance, args.people_radius, num=4)
-        for distance in distances:
-            for index in range(max(args.static_people * 3, 24)):
-                angle = 2.0 * np.pi * index / max(args.static_people * 3, 24)
-                candidates.append(carla.Location(
-                    x=ego_location.x + distance * np.cos(angle),
-                    y=ego_location.y + distance * np.sin(angle),
-                    z=ego_location.z + 0.5,
-                ))
-
-    random.shuffle(candidates)
     people = []
-    for location in candidates:
+
+    for _ in range(args.people_attempts):
         if len(people) >= args.static_people:
             break
-        if any(distance_2d(location, person.get_location()) < 1.0 for person in people):
+
+        angle = random.uniform(0.0, 2.0 * np.pi)
+        radius = random.uniform(args.people_min_distance, args.people_radius)
+        location = carla.Location(
+            x=ego_location.x + radius * np.cos(angle),
+            y=ego_location.y + radius * np.sin(angle),
+            z=ego_location.z + 0.5,
+        )
+
+        if any(distance_2d(location, p.get_location()) < 1.0 for p in people):
             continue
+
         blueprint = random.choice(blueprints)
         if blueprint.has_attribute("is_invincible"):
             blueprint.set_attribute("is_invincible", "true")
@@ -543,6 +531,10 @@ def pygame_key_set():
         keys.add("right")
     if pressed[K_SPACE]:
         keys.add("space")
+    if pressed[K_l]:
+        keys.add("l")
+    if pressed[K_r]:
+        keys.add("r")
     return keys
 
 
@@ -564,7 +556,7 @@ def draw_pygame(display, font, camera_bytes, camera_size, camera_frame, lidar_fr
     panel.fill((0, 0, 0, 145))
     display.blit(panel, (16, 16))
     lines = [
-        "WASD/arrows: drive   Space: hand brake   ESC: quit",
+        "WASD/arrows: drive   Space: hand brake   R: respawn   ESC: quit",
         "RGB camera frame: %d" % camera_frame,
         "Semantic LiDAR frame: %d" % lidar_frame,
         "Static pedestrians: %d" % people_count,
@@ -682,7 +674,7 @@ class TkCameraView(object):
 
         active = ",".join(sorted(self.keys)) if self.keys else "-"
         self.status_var.set(
-            "WASD/arrows: drive | Space: hand brake | L: save dataset frame | ESC: quit    "
+            "WASD/arrows: drive | Space: hand brake | R: respawn | L: save frame | ESC: quit    "
             "RGB frame: %d    LiDAR frame: %d    Static pedestrians: %d    Keys: %s"
             % (camera_frame, lidar_frame, people_count, active)
         )
@@ -754,6 +746,7 @@ def run(args):
         actors.append(ego)
         people = spawn_static_people(world, ego, args)
         actors.extend(people)
+        last_spawn_location = ego.get_location()
         camera = CameraSensor(world, ego, args.width, args.height)
         lidar = SemanticLidar(world, ego, args)
         actors.extend([camera.sensor, lidar.sensor])
@@ -774,6 +767,22 @@ def run(args):
                 keys = set(tk_view.keys)
             else:
                 keys = set()
+
+            should_respawn = "r" in keys and "r" not in previous_keys
+            if not should_respawn and args.respawn_distance > 0:
+                if distance_2d(ego.get_location(), last_spawn_location) >= args.respawn_distance:
+                    should_respawn = True
+            if should_respawn:
+                alive = [p for p in people if p is not None and p.is_alive]
+                if alive:
+                    client.apply_batch([carla.command.DestroyActor(p.id) for p in alive])
+                for p in people:
+                    if p in actors:
+                        actors.remove(p)
+                world.tick()
+                people = spawn_static_people(world, ego, args)
+                actors.extend(people)
+                last_spawn_location = ego.get_location()
 
             apply_manual_control(ego, keys)
             follow_with_spectator(world, ego)
@@ -881,6 +890,8 @@ def parse_args():
     parser.add_argument("--people-radius", default=10.0, type=float)
     parser.add_argument("--people-min-distance", default=2.0, type=float)
     parser.add_argument("--people-attempts", default=5000, type=int)
+    parser.add_argument("--respawn-distance", default=0.0, type=float,
+                        help="Auto-respawn pedestrians when car moves this many meters (0=disabled)")
     parser.add_argument("--lidar-channels", default=64, type=int)
     parser.add_argument("--lidar-range", default=100.0, type=float)
     parser.add_argument("--lidar-points-per-second", default=500000, type=int)
