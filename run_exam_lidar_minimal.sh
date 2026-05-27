@@ -10,7 +10,15 @@ if [[ -n "${DISPLAY:-}" && -z "${SDL_VIDEODRIVER:-}" ]]; then
   export SDL_VIDEODRIVER=x11
 fi
 
-exec "/media/hyperdog/Новый том1/venv_carla0916/bin/python" exam_lidar_minimal.py \
+PYTHON="${PYTHON:-$SCRIPT_DIR/.venv/bin/python}"
+
+if [[ ! -x "$PYTHON" ]]; then
+  echo "Python environment not found: $PYTHON" >&2
+  echo "Create it first, for example: /home/isr-lab3/miniconda3/envs/carla0916/bin/python -m venv .venv" >&2
+  exit 1
+fi
+
+exec "$PYTHON" exam_lidar_minimal.py \
   --viewer tk \
   --width 800 \
   --height 450 \
